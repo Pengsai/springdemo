@@ -1,5 +1,8 @@
 package com.ps.spring.mvcframework.servlet;
 
+import com.ps.spring.mvcframework.annotation.PSController;
+import com.ps.spring.mvcframework.annotation.PSService;
+
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -79,12 +82,61 @@ public class PSDispatcherServlet extends HttpServlet {
             try {
                 Class<?> clazz = Class.forName(className);
 
+                if (clazz.isAnnotationPresent(PSController.class)) {
+
+                    Object instance = clazz.newInstance();
+
+                    String beanName = lowerFirstCase(clazz.getSimpleName());
+
+                    ioc.put(beanName, instance);
+
+                } else if (clazz.isAnnotationPresent(PSService.class)){
+
+                    // service 初始化的并不是类本身 如果是接口的话 而是类对应的实现类
+                    // 1. 默认就是类名的首字母小写作为key
+
+                    PSService service = clazz.getAnnotation(PSService.class);
+                    String beanName = service.value();
+
+                    // 2. 用户自定义beanName 那么要优先使用自定义的beanName
+
+                    if ("".equals(beanName)) {
+                        beanName = lowerFirstCase(clazz.getSimpleName());
+                    }
+
+                    Object instance = clazz.newInstance();
+                    ioc.put(beanName, instance);
+
+                    // 3. 默认的对象时接口， 我们要使用
+                    // 用接口的全类名作为key， 实现类作为值， 方便依赖注入时使用
+
+                    Class<?>[] interfaces = clazz.getInterfaces();
+
+                    for (Class<?> i : interfaces) {
+                        ioc.put(i.getName(), instance);
+                    }
+
+                } else {
+                    continue;
+                }
+
 
             } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+            } catch (InstantiationException e) {
                 e.printStackTrace();
             }
         }
 
+    }
+
+    private String lowerFirstCase(String simpleName) {
+
+        char[] chars = simpleName.toCharArray();
+        chars[0] += 32;
+        return String.valueOf(chars);
     }
 
     private void doScanner(String scanPackage) {
