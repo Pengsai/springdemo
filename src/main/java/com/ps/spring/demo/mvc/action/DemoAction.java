@@ -1,10 +1,8 @@
 package com.ps.spring.demo.mvc.action;
 
 import com.ps.spring.demo.service.IDemoService;
-import com.ps.spring.mvcframework.annotation.PSAutowired;
-import com.ps.spring.mvcframework.annotation.PSController;
-import com.ps.spring.mvcframework.annotation.PSRequestMapping;
-import com.ps.spring.mvcframework.annotation.PSRequestParam;
+import com.ps.spring.demo.service.IDemoService2;
+import com.ps.spring.mvcframework.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -22,6 +20,9 @@ public class DemoAction {
 
     @PSAutowired
     private IDemoService iDemoService;
+
+    @PSAutowired
+    private IDemoService2 iDemoService2;
 
     @PSRequestMapping("/query")
     public void query(HttpServletRequest req, HttpServletResponse response,

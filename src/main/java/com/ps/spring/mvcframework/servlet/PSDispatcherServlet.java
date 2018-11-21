@@ -1,7 +1,6 @@
 package com.ps.spring.mvcframework.servlet;
 
-import com.ps.spring.mvcframework.annotation.PSController;
-import com.ps.spring.mvcframework.annotation.PSService;
+import com.ps.spring.mvcframework.annotation.*;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -11,6 +10,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.*;
 
@@ -28,19 +29,48 @@ public class PSDispatcherServlet extends HttpServlet {
 
     private Map<String, Object> ioc = new HashMap<>();
 
+    private Map<String, Method> handlerMapping = new HashMap<>();
+
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        super.doPost(req, resp);
+        this.doPost(req, resp);
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
 
-        doDispacher();
+
+        try {
+            doDispacher(req, resp);
+        } catch (Exception e) {
+            e.printStackTrace();
+            resp.getWriter().write("500 Exception,Detail: ");
+        }
 
     }
 
-    private void doDispacher() {
+    private void doDispacher(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+
+        // 先拿到用户的请求
+        String url = req.getRequestURI();
+
+        String contextPath = req.getContextPath();
+
+        url = url.replace(contextPath, "").replaceAll("/+", "/");
+
+        if (!this.handlerMapping.containsKey(url)) {
+            resp.getWriter().write("404 NOT FOUND :" + url);
+            return;
+        }
+
+        Method method = this.handlerMapping.get(url);
+
+        String beanName = lowerFirstCase(method.getDeclaringClass().getSimpleName());
+        Object o = ioc.get(beanName);
+
+        Map<String, String[]> parameterMap = req.getParameterMap();
+
+        method.invoke(o, new Object[]{req, resp, parameterMap.get("name")[0]});
 
     }
 
@@ -48,7 +78,7 @@ public class PSDispatcherServlet extends HttpServlet {
     public void init(ServletConfig config) throws ServletException {
 
         // 1.加载配置文件
-        doLoadConfig(config.getInitParameter("contextConfigLoaction"));
+        doLoadConfig(config.getInitParameter("contextConfigLocation"));
 
 
         // 2. 扫描并加载相关的类
@@ -62,13 +92,89 @@ public class PSDispatcherServlet extends HttpServlet {
 
         // 5. 构造HandlerMapping,将url和Method建立一对一的关系
         initHandlerMapping();
+
+        System.out.println("PS spring mvc is init");
     }
 
     private void initHandlerMapping() {
+        if (ioc.isEmpty()) {
+            return;
+        }
 
+        for (Map.Entry<String, Object> entry : ioc.entrySet()) {
+
+            Class<?> clazz = entry.getValue().getClass();
+
+            if (!clazz.isAnnotationPresent(PSController.class)) {
+                continue;
+            }
+
+            String baseUrl = "";
+            if (clazz.isAnnotationPresent(PSRequestMapping.class)) {
+                PSRequestMapping requestMapping = clazz.getAnnotation(PSRequestMapping.class);
+                baseUrl = requestMapping.value();
+
+            }
+
+            Method[] methods = clazz.getMethods();
+
+            for (Method method : methods) {
+
+
+                if (!method.isAnnotationPresent(PSRequestMapping.class)) {
+                    continue;
+                }
+
+                PSRequestMapping requestMapping = method.getAnnotation(PSRequestMapping.class);
+
+                String url = ("/" + baseUrl + "/" + requestMapping.value()).replaceAll("/+", "/");
+
+                handlerMapping.put(url, method);
+
+                System.out.println("Mapped: " + url + "," + method);
+
+            }
+
+
+        }
     }
 
     private void doAutowired() {
+
+        if (ioc.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<String, Object> entry : ioc.entrySet()) {
+
+            //getDeclaredFields()获得某个类的所有声明的字段，即包括public、private和proteced，但是不包括父类的申明字段。
+            Field[] fields = entry.getValue().getClass().getDeclaredFields();
+
+            for (Field field : fields) {
+                if (!field.isAnnotationPresent(PSAutowired.class)) {
+                    continue;
+                }
+
+                PSAutowired annotation = field.getAnnotation(PSAutowired.class);
+
+                String beanName = annotation.value();
+
+                if ("".equals(beanName)) {
+                    beanName = field.getType().getName();
+                }
+
+                // 如果private protected default 暴力访问
+                field.setAccessible(true);
+
+                try {
+                    field.set(entry.getValue(), ioc.get(beanName));
+                } catch (IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+
+            }
+        }
+
 
     }
 
@@ -77,9 +183,10 @@ public class PSDispatcherServlet extends HttpServlet {
         if (classNames.isEmpty()) {
             return;
         }
+        try {
+            for (String className : classNames) {
 
-        for (String className : classNames) {
-            try {
+                className = className.replaceAll("/", "\\.");
                 Class<?> clazz = Class.forName(className);
 
                 if (clazz.isAnnotationPresent(PSController.class)) {
@@ -90,7 +197,7 @@ public class PSDispatcherServlet extends HttpServlet {
 
                     ioc.put(beanName, instance);
 
-                } else if (clazz.isAnnotationPresent(PSService.class)){
+                } else if (clazz.isAnnotationPresent(PSService.class)) {
 
                     // service 初始化的并不是类本身 如果是接口的话 而是类对应的实现类
                     // 1. 默认就是类名的首字母小写作为key
@@ -113,6 +220,11 @@ public class PSDispatcherServlet extends HttpServlet {
                     Class<?>[] interfaces = clazz.getInterfaces();
 
                     for (Class<?> i : interfaces) {
+
+                        if (ioc.containsKey(i.getName())) {
+                            throw new Exception("The beanName " + clazz.getName() + " is aleardy exists!!!");
+                        }
+
                         ioc.put(i.getName(), instance);
                     }
 
@@ -121,13 +233,9 @@ public class PSDispatcherServlet extends HttpServlet {
                 }
 
 
-            } catch (ClassNotFoundException e) {
-                e.printStackTrace();
-            } catch (IllegalAccessException e) {
-                e.printStackTrace();
-            } catch (InstantiationException e) {
-                e.printStackTrace();
             }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
 
     }
@@ -140,28 +248,28 @@ public class PSDispatcherServlet extends HttpServlet {
     }
 
     private void doScanner(String scanPackage) {
-
-        URL url = this.getClass().getClassLoader().getResource("/" + scanPackage.replaceAll("\\.", "/"));
+        scanPackage = scanPackage.replaceAll("\\.", "/");
+        URL url = this.getClass().getClassLoader().getResource(scanPackage);
         File classDir = new File(url.getFile());
 
         for (File file : classDir.listFiles()) {
 
             if (file.isDirectory()) {
-                doScanner(scanPackage+ "."+file.getName());
+                doScanner(scanPackage + "/" + file.getName());
             } else {
                 if (!file.getName().endsWith(".class")) {
                     continue;
                 }
-                String className = scanPackage+"."+file.getName().replace(".class", "");
+                String className = scanPackage + "/" + file.getName().replace(".class", "");
                 classNames.add(className);
             }
         }
 
     }
 
-    private void doLoadConfig(String contextConfigLoaction) {
+    private void doLoadConfig(String contextConfigLocation) {
 
-        InputStream is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLoaction);
+        InputStream is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLocation);
 
         try {
             contextConfig.load(is);
